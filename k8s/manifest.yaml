@@ -1,0 +1,142 @@
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  namespace: default
+  labels:
+    app: api-gateway
+  name: api-gateway-basic-auth
+type: Opaque
+stringData:
+  AUTH_GITLAB_PASSWORD: gitlabpassword
+  AUTH_GITLAB_USER: gitlab
+  AUTH_INSTRUCTOR_PASSWORD: instructorpassword
+  AUTH_INSTRUCTOR_USER: instructor
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  namespace: default
+  labels:
+    app: api-gateway
+  name: api-gateway
+data:
+  application.yml: |-
+    ---
+    server:
+      port: 8080
+
+    logging:
+      level:
+        root: WARN
+        com.topsim.weasel: INFO
+
+    api-gateway:
+      security:
+        role:
+          instructor:
+            username: ${AUTH_INSTRUCTOR_USER}
+            password: ${AUTH_INSTRUCTOR_PASSWORD}
+          gitlab:
+            username: ${AUTH_GITLAB_USER}
+            password: ${AUTH_GITLAB_PASSWORD}
+
+    spring:
+      cloud:
+        kubernetes:
+          reload:
+            enabled: true
+            monitoring-secrets: true
+        gateway:
+          routes:
+            - id: reports-instructor
+              uri: http://report-service
+              predicates:
+                - Path=/games/*/periods/*/reports/**
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  namespace: default
+  labels:
+    app: api-gateway
+  name: api-gateway
+spec:
+  selector:
+    matchLabels:
+      app: api-gateway
+  template:
+    metadata:
+      labels:
+        app: api-gateway
+    spec:
+      serviceAccountName: api-gateway
+      containers:
+        - name: api-gateway
+          image: api-gateway:latest
+          imagePullPolicy: Never
+          ports:
+            - containerPort: 8086
+          env:
+            - name: AUTH_INSTRUCTOR_USER
+              valueFrom:
+                secretKeyRef:
+                  name: api-gateway-basic-auth
+                  key: AUTH_INSTRUCTOR_USER
+            - name: AUTH_INSTRUCTOR_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: api-gateway-basic-auth
+                  key: AUTH_INSTRUCTOR_PASSWORD
+            - name: AUTH_GITLAB_USER
+              valueFrom:
+                secretKeyRef:
+                  name: api-gateway-basic-auth
+                  key: AUTH_GITLAB_USER
+            - name: AUTH_GITLAB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: api-gateway-basic-auth
+                  key: AUTH_GITLAB_PASSWORD
+---
+apiVersion: v1
+kind: Service
+metadata:
+  namespace: default
+  labels:
+    app: api-gateway
+  name: api-gateway
+spec:
+  selector:
+    app: api-gateway
+  ports:
+    - port: 80
+      name: http
+      targetPort: 8080
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: api-gateway
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: api-gateway
+roleRef:
+  kind: Role
+  apiGroup: rbac.authorization.k8s.io
+  name: api-gateway
+subjects:
+  - kind: ServiceAccount
+    name: api-gateway
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: api-gateway
+rules:
+  - apiGroups: [""]
+    resources: ["pods","configmaps", "services"]
+    verbs: ["get", "watch", "list"]
